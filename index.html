@@ -3,326 +3,338 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Interactive Particle Heart</title>
-    <!-- Tailwind CSS for utility reset -->
-    <script src="https://cdn.tailwindcss.com"></script>
+    <title>Interactive 3D Heart Galaxy</title>
     <style>
         body {
             background-color: #000000;
             margin: 0;
             overflow: hidden;
-            cursor: pointer;
             user-select: none;
             -webkit-user-select: none;
+            cursor: pointer;
         }
         canvas {
             display: block;
             width: 100vw;
             height: 100vh;
-        }
-        /* Subtle, non-intrusive elegant instructions that fade out */
-        .instruction-overlay {
             position: absolute;
-            bottom: 2rem;
-            left: 50%;
-            transform: translateX(-50%);
-            color: rgba(244, 63, 94, 0.4);
-            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            font-size: 0.8rem;
-            letter-spacing: 0.15em;
-            text-transform: uppercase;
-            pointer-events: none;
-            animation: pulse-fade 3s infinite ease-in-out;
-            text-align: center;
-        }
-        @keyframes pulse-fade {
-            0%, 100% { opacity: 0.3; }
-            50% { opacity: 0.7; }
+            top: 0;
+            left: 0;
+            z-index: 1;
         }
     </style>
 </head>
-<body class="bg-black flex items-center justify-center relative">
+<body>
 
-    <canvas id="heartCanvas"></canvas>
-    <div class="instruction-overlay">Move cursor or drag to distort &middot; Tap to burst</div>
+    <!-- Three.js Canvas Container -->
+    <canvas id="webglCanvas"></canvas>
+
+    <!-- CDN Libraries: Three.js & GSAP -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
 
     <script>
-        const canvas = document.getElementById('heartCanvas');
-        const ctx = canvas.getContext('2d');
+        const canvas = document.getElementById('webglCanvas');
+        const scene = new THREE.Scene();
+        
+        // Add subtle cosmic fog for depth
+        scene.fog = new THREE.FogExp2(0x000000, 0.015);
 
-        // Handle high DPI screens for sharp particles
-        let width = canvas.width = window.innerWidth;
-        let height = canvas.height = window.innerHeight;
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.z = 45;
 
-        window.addEventListener('resize', () => {
-            width = canvas.width = window.innerWidth;
-            height = canvas.height = window.innerHeight;
-            calculateHeartScale();
-            initHeart();
+        const renderer = new THREE.WebGLRenderer({
+            canvas: canvas,
+            antialias: true,
+            alpha: false
         });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setClearColor(0x000000, 1.0);
 
+        // Core Configuration & Particle Count
+        const particleCount = 8500;
+        let currentMode = 'gather'; // 'scatter' (running around) or 'gather' (assembled heart)
+        let scatterTimeout = null;
+
+        // Interactive mouse tracking
         const mouse = {
-            x: -1000,
-            y: -1000,
-            px: -1000, // Previous x for velocity calculation
-            py: -1000, // Previous y
-            vx: 0,
-            vy: 0,
-            radius: 120, // Magnetic field of influence
-            active: false
+            x: 0,
+            y: 0,
+            targetX: 0,
+            targetY: 0
         };
 
-        // Center of gravity target for the whole heart (can drift with the mouse)
-        const heartCenter = {
-            x: width / 2,
-            y: height / 2,
-            targetX: width / 2,
-            targetY: height / 2
-        };
+        // Programmatically creates a premium red glowing soft circle texture
+        function createGlowTexture() {
+            const size = 64;
+            const canvasTexture = document.createElement('canvas');
+            canvasTexture.width = size;
+            canvasTexture.height = size;
+            const ctx = canvasTexture.getContext('2d');
 
-        let heartScale = 12;
-        function calculateHeartScale() {
-            // Dynamically scale the heart to fit perfectly on any screen size
-            heartScale = Math.min(width, height) / 38;
-            heartCenter.targetX = width / 2;
-            heartCenter.targetY = height / 2;
+            // Draw radial glow matching a passionate, pure red glowing color profile
+            const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+            gradient.addColorStop(0, 'rgba(255, 230, 235, 1)'); // Blazing white-hot core
+            gradient.addColorStop(0.15, 'rgba(255, 30, 70, 0.95)'); // Inner hot red
+            gradient.addColorStop(0.4, 'rgba(230, 10, 40, 0.5)');   // Deep glowing scarlet
+            gradient.addColorStop(0.8, 'rgba(100, 0, 15, 0.15)');   // Ambient dark ruby shadow
+            gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');           // Complete transparency
+
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, size, size);
+
+            return new THREE.CanvasTexture(canvasTexture);
         }
-        calculateHeartScale();
 
-        const updateMouse = (e) => {
-            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        const particleTexture = createGlowTexture();
+
+        // Parametric 3D Heart formula coordinates
+        function getHeartPoint(t, phi) {
+            const scale = 1.15;
+            const x = 16 * Math.pow(Math.sin(t), 3) * scale;
+            const y = (13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t)) * scale;
             
-            if (mouse.px !== -1000) {
-                mouse.vx = clientX - mouse.px;
-                mouse.vy = clientY - mouse.py;
-            }
+            // Generate volumetric thickness on Z axis
+            const thickness = 0.2 + 0.8 * Math.sin(t);
+            const z = Math.sin(phi) * 5 * thickness * scale;
+
+            return new THREE.Vector3(x, y - 2, z);
+        }
+
+        const geometry = new THREE.BufferGeometry();
+        
+        // Float32Arrays for Three.js geometry attributes
+        const positions = new Float32Array(particleCount * 3);
+        const colors = new Float32Array(particleCount * 3);
+
+        const particlesData = [];
+
+        // Radiant and passionate red romantic color palette
+        const romancePalette = [
+            new THREE.Color(0xff003c), // Radiant bright red
+            new THREE.Color(0xff1a40), // Intense rose red
+            new THREE.Color(0xcc0029), // Crimson red
+            new THREE.Color(0xff4d6d), // Bright glowing pinkish red
+            new THREE.Color(0xe60000)  // Solid pure red
+        ];
+
+        for (let i = 0; i < particleCount; i++) {
+            const t = (i / particleCount) * Math.PI * 2;
+            const phi = Math.random() * Math.PI * 2;
             
-            mouse.x = clientX;
-            mouse.y = clientY;
-            mouse.px = clientX;
-            mouse.py = clientY;
-            mouse.active = true;
-
-            // Make the entire heart center shift gently toward the cursor (parallax effect)
-            heartCenter.targetX = (width / 2) + (clientX - width / 2) * 0.12;
-            heartCenter.targetY = (height / 2) + (clientY - height / 2) * 0.12;
-        };
-
-        const resetMouse = () => {
-            mouse.active = false;
-            mouse.x = -1000;
-            mouse.y = -1000;
-            mouse.px = -1000;
-            mouse.py = -1000;
-            mouse.vx = 0;
-            mouse.vy = 0;
+            // Core heart target position
+            const heartTarget = getHeartPoint(t, phi);
             
-            // Return heart center to absolute screen center
-            heartCenter.targetX = width / 2;
-            heartCenter.targetY = height / 2;
-        };
+            // Add delicate organic noise offsets to give natural dust look
+            const noiseX = (Math.random() - 0.5) * 1.5;
+            const noiseY = (Math.random() - 0.5) * 1.5;
+            const noiseZ = (Math.random() - 0.5) * 1.5;
+            heartTarget.add(new THREE.Vector3(noiseX, noiseY, noiseZ));
 
-        window.addEventListener('mousemove', updateMouse);
-        window.addEventListener('touchmove', (e) => {
-            updateMouse(e);
-        }, { passive: true });
+            // Initial chaotic positions scattered in space
+            const startX = (Math.random() - 0.5) * 120;
+            const startY = (Math.random() - 0.5) * 120;
+            const startZ = (Math.random() - 0.5) * 120;
 
-        window.addEventListener('mouseleave', resetMouse);
-        window.addEventListener('touchend', resetMouse);
+            positions[i * 3] = startX;
+            positions[i * 3 + 1] = startY;
+            positions[i * 3 + 2] = startZ;
 
-        // Parametric Heart Formula
-        function getHeartPoint(t) {
-            const x = 16 * Math.pow(Math.sin(t), 3);
-            const y = -(13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t));
-            return { x, y };
+            // Load colors into buffer
+            const pColor = romancePalette[Math.floor(Math.random() * romancePalette.length)];
+            colors[i * 3] = pColor.r;
+            colors[i * 3 + 1] = pColor.g;
+            colors[i * 3 + 2] = pColor.b;
+
+            // Setup particle movement physics and swirling behaviors
+            particlesData.push({
+                currentPos: new THREE.Vector3(startX, startY, startZ),
+                heartPos: heartTarget,
+                velocity: new THREE.Vector3(0, 0, 0),
+                
+                // Spiral orbit parameters when particles "run wild"
+                orbitRadius: Math.random() * 26 + 8,
+                orbitSpeed: (0.012 + Math.random() * 0.022) * (Math.random() > 0.5 ? 1 : -1),
+                orbitAngle: Math.random() * Math.PI * 2,
+                orbitHeight: (Math.random() - 0.5) * 38,
+
+                // Smooth attraction and kinetic dragging
+                attractionFactor: 0.035 + Math.random() * 0.055,
+                drag: 0.85 + Math.random() * 0.05
+            });
         }
 
-        class Particle {
-            constructor(tx, ty, progressRatio) {
-                // Initial placement spreads them around dynamically
-                this.x = width / 2 + (Math.random() - 0.5) * width;
-                this.y = height / 2 + (Math.random() - 0.5) * height;
-                
-                // Target offsets from the heart's center of gravity
-                this.ox = tx;
-                this.oy = ty;
-                
-                this.vx = 0;
-                this.vy = 0;
-                
-                this.baseSize = Math.random() * 1.5 + 1.0;
-                this.size = this.baseSize;
-                
-                // Deep lush pink-red palette resembling image_bcb164.png
-                const colors = [
-                    'rgba(244, 63, 94, ',   // Rose Pink
-                    'rgba(236, 72, 153, ',  // Pink Glow
-                    'rgba(219, 39, 119, ',  // Deep Ruby
-                    'rgba(244, 114, 182, ', // Soft Rose
-                    'rgba(255, 192, 203, '  // Stardust White-Pink
-                ];
-                this.baseColor = colors[Math.floor(Math.random() * colors.length)];
-                
-                this.alpha = Math.random() * 0.4 + 0.6;
-                this.phase = Math.random() * Math.PI * 2;
-                this.speed = 0.02 + Math.random() * 0.03;
-            }
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
-            update() {
-                // Calculate absolute target coordinate based on current moving heart center
-                const targetX = heartCenter.x + this.ox * heartScale;
-                const targetY = heartCenter.y + this.oy * heartScale;
-                
-                // Spring force pulling back to target coordinate on the heart line
-                const dx = targetX - this.x;
-                const dy = targetY - this.y;
-                
-                this.vx += dx * 0.015;
-                this.vy += dy * 0.015;
-
-                // Mouse interaction physics (Attraction / Repulsion depending on speed)
-                if (mouse.active) {
-                    const mdx = mouse.x - this.x;
-                    const mdy = mouse.y - this.y;
-                    const dist = Math.sqrt(mdx * mdx + mdy * mdy);
-                    
-                    if (dist < mouse.radius) {
-                        const force = (mouse.radius - dist) / mouse.radius;
-                        const angle = Math.atan2(mdy, mdx);
-                        
-                        // Push away from cursor smoothly (creates beautiful ripples)
-                        this.vx -= Math.cos(angle) * force * 4.5;
-                        this.vy -= Math.sin(angle) * force * 4.5;
-
-                        // Create a subtle whirlpool/dust spiral swirl effect
-                        this.vx += Math.sin(angle) * force * 1.5;
-                        this.vy -= Math.cos(angle) * force * 1.5;
-                        
-                        // Enlarge when cursor is near
-                        this.size = this.baseSize * (1.0 + force * 1.2);
-                    } else {
-                        this.size += (this.baseSize - this.size) * 0.1;
-                    }
-                } else {
-                    this.size += (this.baseSize - this.size) * 0.1;
-                }
-
-                // Apply simple friction/damping
-                this.vx *= 0.92;
-                this.vy *= 0.92;
-
-                // Update position
-                this.x += this.vx;
-                this.y += this.vy;
-            }
-
-            draw() {
-                // Natural pulsing glow
-                const flash = Math.sin(Date.now() * this.speed + this.phase) * 0.25;
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
-                ctx.fillStyle = this.baseColor + Math.max(0.1, this.alpha + flash) + ')';
-                ctx.fill();
-            }
-        }
-
-        class SplashSpark {
-            constructor(x, y) {
-                this.x = x;
-                this.y = y;
-                const angle = Math.random() * Math.PI * 2;
-                const speed = Math.random() * 6 + 2;
-                this.vx = Math.cos(angle) * speed;
-                this.vy = Math.sin(angle) * speed;
-                this.size = Math.random() * 3 + 1.5;
-                this.alpha = 1.0;
-                this.decay = Math.random() * 0.02 + 0.015;
-                this.color = `rgba(253, 164, 175, `; // Soft glowing pink
-            }
-            update() {
-                this.x += this.vx;
-                this.y += this.vy;
-                this.vy += 0.06; // subtle gravity pull
-                this.vx *= 0.98;
-                this.alpha -= this.decay;
-            }
-            draw() {
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
-                ctx.fillStyle = this.color + this.alpha + ')';
-                ctx.fill();
-            }
-        }
-
-        const particles = [];
-        const splashes = [];
-        const totalParticles = 1400; // Optimal density matching image_bcb164.png
-
-        function initHeart() {
-            particles.length = 0;
-            for (let i = 0; i < totalParticles; i++) {
-                // Maps particles evenly around parametric heart curve
-                const t = (i / totalParticles) * Math.PI * 2;
-                const point = getHeartPoint(t);
-                
-                // Add minor random scatter/noise so it looks like soft, organic dust
-                const scatter = (Math.random() - 0.5) * 1.8;
-                const finalX = point.x + scatter * Math.sin(t);
-                const finalY = point.y + scatter * Math.cos(t);
-
-                particles.push(new Particle(finalX, finalY, i / totalParticles));
-            }
-        }
-
-        // Click/Touch triggers instant burst of affection sparks
-        window.addEventListener('mousedown', (e) => {
-            for (let i = 0; i < 30; i++) {
-                splashes.push(new SplashSpark(e.clientX, e.clientY));
-            }
+        // Create Materials using Premium Additive Blending
+        const material = new THREE.PointsMaterial({
+            size: 1.15,
+            map: particleTexture,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            transparent: true,
+            vertexColors: true
         });
 
+        // Add particles to scene
+        const particleSystem = new THREE.Points(geometry, material);
+        scene.add(particleSystem);
+
+        // Gentle rotation sway on the Y-axis (Matching image_bc9a06.png pattern)
+        gsap.fromTo(particleSystem.rotation, 
+            { y: -0.22 }, 
+            { 
+                y: 0.22, 
+                repeat: -1, 
+                yoyo: true, 
+                ease: "power1.inOut", 
+                duration: 4.8 
+            }
+        );
+
+        // Gentle breathing motion up and down
+        gsap.fromTo(particleSystem.position,
+            { y: -0.6 },
+            {
+                y: 0.6,
+                repeat: -1,
+                yoyo: true,
+                ease: "sine.inOut",
+                duration: 3.2
+            }
+        );
+
+        // Control function to alternate particle modes
+        function setMode(mode) {
+            currentMode = mode;
+            
+            if (mode === 'scatter') {
+                // Randomize orbit properties dynamically for chaotic spiral flow
+                particlesData.forEach(p => {
+                    p.orbitAngle = Math.atan2(p.currentPos.y, p.currentPos.x) + (Math.random() - 0.5) * 3;
+                    p.orbitRadius = Math.random() * 26 + 6;
+                    p.orbitSpeed = (0.016 + Math.random() * 0.024) * (Math.random() > 0.5 ? 1 : -1);
+                });
+            }
+        }
+
+        // Function to run wild, then re-gather automatically
+        function triggerTransition() {
+            setMode('scatter');
+            
+            if (scatterTimeout) clearTimeout(scatterTimeout);
+            
+            // Gather back automatically after 3.8 seconds
+            scatterTimeout = setTimeout(() => {
+                setMode('gather');
+            }, 3800);
+        }
+
+        // Tap/click screen to trigger scatter-then-gather sequence
+        window.addEventListener('mousedown', triggerTransition);
         window.addEventListener('touchstart', (e) => {
-            const touch = e.touches[0];
-            for (let i = 0; i < 30; i++) {
-                splashes.push(new SplashSpark(touch.clientX, touch.clientY));
+            triggerTransition();
+        }, { passive: true });
+
+        // Responsive cursor / tilt reaction
+        window.addEventListener('mousemove', (e) => {
+            mouse.targetX = ((e.clientX - window.innerWidth / 2) / (window.innerWidth / 2)) * 0.45;
+            mouse.targetY = -((e.clientY - window.innerHeight / 2) / (window.innerHeight / 2)) * 0.45;
+        });
+
+        window.addEventListener('touchmove', (e) => {
+            if (e.touches.length > 0) {
+                const touch = e.touches[0];
+                mouse.targetX = ((touch.clientX - window.innerWidth / 2) / (window.innerWidth / 2)) * 0.45;
+                mouse.targetY = -((touch.clientY - window.innerHeight / 2) / (window.innerHeight / 2)) * 0.45;
             }
         }, { passive: true });
 
-        function renderLoop() {
-            // Create a premium motion blur trailing effect (using semi-transparent black background redraws)
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.18)';
-            ctx.fillRect(0, 0, width, height);
+        // Maintain full responsiveness
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
 
-            // Interpolate center coordinates smoothly for responsive parallax
-            heartCenter.x += (heartCenter.targetX - heartCenter.x) * 0.08;
-            heartCenter.y += (heartCenter.targetY - heartCenter.y) * 0.08;
+        const clock = new THREE.Clock();
 
-            // Render loop with high luminosity composite operations
-            ctx.globalCompositeOperation = 'screen';
+        function animate() {
+            requestAnimationFrame(animate);
 
-            // Draw core heart particles
-            for (let i = 0; i < particles.length; i++) {
-                particles[i].update();
-                particles[i].draw();
-            }
+            const time = clock.getElapsedTime();
 
-            // Draw splashes
-            for (let i = splashes.length - 1; i >= 0; i--) {
-                splashes[i].update();
-                splashes[i].draw();
-                if (splashes[i].alpha <= 0) {
-                    splashes.splice(i, 1);
+            // Parallax camera easing
+            mouse.x += (mouse.targetX - mouse.x) * 0.08;
+            mouse.y += (mouse.targetY - mouse.y) * 0.08;
+            scene.rotation.y = mouse.x;
+            scene.rotation.x = mouse.y;
+
+            // Heartbeat rhythmic pulsing behavior (lub-dub)
+            const lub = Math.sin(time * 3.6) * 0.5 + 0.5;
+            const dub = Math.sin(time * 7.2) * 0.25 + 0.25;
+            const pulseScale = 1.0 + (Math.max(0, lub) * 0.065) + (Math.max(0, dub) * 0.03);
+
+            // Update particle geometry positions array
+            const positionsAttr = geometry.attributes.position.array;
+
+            for (let i = 0; i < particleCount; i++) {
+                const p = particlesData[i];
+
+                if (currentMode === 'scatter') {
+                    // RUN WILD STATE: Spiral orbital swarming pattern
+                    p.orbitAngle += p.orbitSpeed;
+                    
+                    let targetX = Math.cos(p.orbitAngle) * p.orbitRadius;
+                    let targetZ = Math.sin(p.orbitAngle) * p.orbitRadius;
+                    let targetY = p.orbitHeight;
+
+                    const diffX = targetX - p.currentPos.x;
+                    const diffY = targetY - p.currentPos.y;
+                    const diffZ = targetZ - p.currentPos.z;
+
+                    p.velocity.x += diffX * 0.016;
+                    p.velocity.y += diffY * 0.016;
+                    p.velocity.z += diffZ * 0.016;
+                } else {
+                    // GATHER STATE: Pull together into the beating 3D heart structure
+                    const heartPosScaled = p.heartPos.clone().multiplyScalar(pulseScale);
+                    
+                    const diffX = heartPosScaled.x - p.currentPos.x;
+                    const diffY = heartPosScaled.y - p.currentPos.y;
+                    const diffZ = heartPosScaled.z - p.currentPos.z;
+
+                    p.velocity.x += diffX * p.attractionFactor;
+                    p.velocity.y += diffY * p.attractionFactor;
+                    p.velocity.z += diffZ * p.attractionFactor;
                 }
+
+                // Apply drag friction to keep simulation smooth and organic
+                p.velocity.multiplyScalar(p.drag);
+                p.currentPos.add(p.velocity);
+
+                // Update position attributes
+                positionsAttr[i * 3] = p.currentPos.x;
+                positionsAttr[i * 3 + 1] = p.currentPos.y;
+                positionsAttr[i * 3 + 2] = p.currentPos.z;
             }
 
-            ctx.globalCompositeOperation = 'source-over';
-            requestAnimationFrame(renderLoop);
+            // Flag WebGL buffer updates
+            geometry.attributes.position.needsUpdate = true;
+
+            // Render single frame pass
+            renderer.render(scene, camera);
         }
 
-        // Initialize and start on screen load
-        initHeart();
-        renderLoop();
+        // Initialize animation loop
+        window.onload = function() {
+            setTimeout(() => {
+                setMode('gather');
+            }, 300);
+            animate();
+        };
     </script>
 </body>
 </html>
