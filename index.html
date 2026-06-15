@@ -2,9 +2,12 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Interactive 3D Heart Galaxy</title>
     <style>
+        html, body {
+            height: 100%;
+        }
         body {
             background-color: #000000;
             margin: 0;
@@ -12,15 +15,59 @@
             user-select: none;
             -webkit-user-select: none;
             cursor: pointer;
+            padding-top: env(safe-area-inset-top);
+            padding-right: env(safe-area-inset-right);
+            padding-bottom: env(safe-area-inset-bottom);
+            padding-left: env(safe-area-inset-left);
         }
         canvas {
             display: block;
-            width: 100vw;
-            height: 100vh;
-            position: absolute;
-            top: 0;
-            left: 0;
+            width: 100%;
+            height: 100%;
+            position: fixed;
+            inset: 0;
             z-index: 1;
+            touch-action: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        /* Top overlay removed (slideshow disabled) */
+        /* Top running ticker */
+        #top-ticker {
+            position: fixed;
+            /* moved down slightly from the very top */
+            top: calc(env(safe-area-inset-top, 12px) + 28px);
+            left: 0;
+            right: 0;
+            pointer-events: none;
+            z-index: 30;
+            overflow: hidden;
+            height: auto;
+            display: flex;
+            align-items: center;
+            padding: 6px 12px;
+        }
+        #top-ticker .track {
+            display: inline-block;
+            white-space: nowrap;
+            will-change: transform;
+        }
+        #top-ticker .ticker-text {
+            color: #ffffff;
+            font-weight: 800;
+            /* smaller, responsive sizing */
+            font-size: min(6.5vw, 34px);
+            padding: 0 18px;
+            text-shadow: 0 6px 18px rgba(0,0,0,0.6);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;
+            display: inline-block;
+        }
+        #top-ticker .ticker-text svg {
+            width: 1.6em;
+            height: 1.6em;
+            fill: #ffffff;
+            vertical-align: middle;
+            margin-left: 10px;
+            display: inline-block;
         }
     </style>
 </head>
@@ -28,6 +75,10 @@
 
     <!-- Three.js Canvas Container -->
     <canvas id="webglCanvas"></canvas>
+
+    <!-- Top overlay slideshow removed -->
+    <!-- Top running ticker -->
+    <div id="top-ticker" aria-hidden="true"><div class="track" id="top-track"></div></div>
 
     <!-- CDN Libraries: Three.js & GSAP -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -252,11 +303,65 @@
             }
         }, { passive: true });
 
+        // Adaptive viewport adjustments for mobile devices
+        function adaptToViewport() {
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+
+            // Zoom camera out slightly on small screens so heart fits nicely
+            if (w <= 420) camera.position.z = 65;
+            else if (w <= 800) camera.position.z = 55;
+            else camera.position.z = 45;
+
+            // Make particles a bit larger on narrow screens for readability
+            const baseSize = Math.max(0.9, Math.min(2.4, (w / 600) * 1.3));
+            material.size = baseSize;
+            material.needsUpdate = true;
+
+            // Update renderer sizing & pixel ratio
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.setSize(w, h);
+        }
+
+        // Top slideshow removed per user request
+
+        // Top running ticker using GSAP
+        let tickerTween = null;
+        function startTicker() {
+            const message = 'I Love You Ali';
+            const track = document.getElementById('top-track');
+            track.innerHTML = '';
+
+            // Single message span
+            const s = document.createElement('span');
+            s.className = 'ticker-text';
+            // Insert message plus a small white heart SVG icon
+            s.innerHTML = message + ' <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg"><path d="M12 21s-7.5-4.8-9.2-7.1C1.2 11.6 3 7.7 6.4 6.2 8.1 5.4 10 6 12 8c2-2 3.9-2.6 5.6-1.8 3.4 1.5 5.2 5.4 3.6 7.7C19.5 16.2 12 21 12 21z"/></svg>';
+            track.appendChild(s);
+
+            // Kill existing tween if any
+            if (tickerTween) tickerTween.kill();
+
+            // Measure widths after inserting
+            const textWidth = s.offsetWidth;
+            const startX = window.innerWidth;
+            const endX = -textWidth;
+            const distance = startX - endX; // total px to travel
+            const speed = 140; // pixels per second
+            const duration = Math.max(3, distance / speed);
+
+            // Start off-screen at the right and animate to off-screen left, then jump back and repeat
+            gsap.set(track, { x: startX });
+            tickerTween = gsap.to(track, { x: endX, duration: duration, ease: 'none', repeat: -1 });
+        }
+
         // Maintain full responsiveness
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
+            adaptToViewport();
+            // restart ticker animation to recalc widths
+            startTicker();
         });
 
         const clock = new THREE.Clock();
@@ -330,9 +435,11 @@
 
         // Initialize animation loop
         window.onload = function() {
+            adaptToViewport();
             setTimeout(() => {
                 setMode('gather');
             }, 300);
+            startTicker();
             animate();
         };
     </script>
