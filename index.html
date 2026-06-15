@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Particle Heart</title>
+    <!-- Tailwind CSS for utility reset -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background-color: #000000;
+            margin: 0;
+            overflow: hidden;
+            cursor: pointer;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+        /* Subtle, non-intrusive elegant instructions that fade out */
+        .instruction-overlay {
+            position: absolute;
+            bottom: 2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(244, 63, 94, 0.4);
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 0.8rem;
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            pointer-events: none;
+            animation: pulse-fade 3s infinite ease-in-out;
+            text-align: center;
+        }
+        @keyframes pulse-fade {
+            0%, 100% { opacity: 0.3; }
+            50% { opacity: 0.7; }
+        }
+    </style>
+</head>
+<body class="bg-black flex items-center justify-center relative">
+
+    <canvas id="heartCanvas"></canvas>
+    <div class="instruction-overlay">Move cursor or drag to distort &middot; Tap to burst</div>
+
+    <script>
+        const canvas = document.getElementById('heartCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Handle high DPI screens for sharp particles
+        let width = canvas.width = window.innerWidth;
+        let height = canvas.height = window.innerHeight;
+
+        window.addEventListener('resize', () => {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+            calculateHeartScale();
+            initHeart();
+        });
+
+        const mouse = {
+            x: -1000,
+            y: -1000,
+            px: -1000, // Previous x for velocity calculation
+            py: -1000, // Previous y
+            vx: 0,
+            vy: 0,
+            radius: 120, // Magnetic field of influence
+            active: false
+        };
+
+        // Center of gravity target for the whole heart (can drift with the mouse)
+        const heartCenter = {
+            x: width / 2,
+            y: height / 2,
+            targetX: width / 2,
+            targetY: height / 2
+        };
+
+        let heartScale = 12;
+        function calculateHeartScale() {
+            // Dynamically scale the heart to fit perfectly on any screen size
+            heartScale = Math.min(width, height) / 38;
+            heartCenter.targetX = width / 2;
+            heartCenter.targetY = height / 2;
+        }
+        calculateHeartScale();
+
+        const updateMouse = (e) => {
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            
+            if (mouse.px !== -1000) {
+                mouse.vx = clientX - mouse.px;
+                mouse.vy = clientY - mouse.py;
+            }
+            
+            mouse.x = clientX;
+            mouse.y = clientY;
+            mouse.px = clientX;
+            mouse.py = clientY;
+            mouse.active = true;
+
+            // Make the entire heart center shift gently toward the cursor (parallax effect)
+            heartCenter.targetX = (width / 2) + (clientX - width / 2) * 0.12;
+            heartCenter.targetY = (height / 2) + (clientY - height / 2) * 0.12;
+        };
+
+        const resetMouse = () => {
+            mouse.active = false;
+            mouse.x = -1000;
+            mouse.y = -1000;
+            mouse.px = -1000;
+            mouse.py = -1000;
+            mouse.vx = 0;
+            mouse.vy = 0;
+            
+            // Return heart center to absolute screen center
+            heartCenter.targetX = width / 2;
+            heartCenter.targetY = height / 2;
+        };
+
+        window.addEventListener('mousemove', updateMouse);
+        window.addEventListener('touchmove', (e) => {
+            updateMouse(e);
+        }, { passive: true });
+
+        window.addEventListener('mouseleave', resetMouse);
+        window.addEventListener('touchend', resetMouse);
+
+        // Parametric Heart Formula
+        function getHeartPoint(t) {
+            const x = 16 * Math.pow(Math.sin(t), 3);
+            const y = -(13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t));
+            return { x, y };
+        }
+
+        class Particle {
+            constructor(tx, ty, progressRatio) {
+                // Initial placement spreads them around dynamically
+                this.x = width / 2 + (Math.random() - 0.5) * width;
+                this.y = height / 2 + (Math.random() - 0.5) * height;
+                
+                // Target offsets from the heart's center of gravity
+                this.ox = tx;
+                this.oy = ty;
+                
+                this.vx = 0;
+                this.vy = 0;
+                
+                this.baseSize = Math.random() * 1.5 + 1.0;
+                this.size = this.baseSize;
+                
+                // Deep lush pink-red palette resembling image_bcb164.png
+                const colors = [
+                    'rgba(244, 63, 94, ',   // Rose Pink
+                    'rgba(236, 72, 153, ',  // Pink Glow
+                    'rgba(219, 39, 119, ',  // Deep Ruby
+                    'rgba(244, 114, 182, ', // Soft Rose
+                    'rgba(255, 192, 203, '  // Stardust White-Pink
+                ];
+                this.baseColor = colors[Math.floor(Math.random() * colors.length)];
+                
+                this.alpha = Math.random() * 0.4 + 0.6;
+                this.phase = Math.random() * Math.PI * 2;
+                this.speed = 0.02 + Math.random() * 0.03;
+            }
+
+            update() {
+                // Calculate absolute target coordinate based on current moving heart center
+                const targetX = heartCenter.x + this.ox * heartScale;
+                const targetY = heartCenter.y + this.oy * heartScale;
+                
+                // Spring force pulling back to target coordinate on the heart line
+                const dx = targetX - this.x;
+                const dy = targetY - this.y;
+                
+                this.vx += dx * 0.015;
+                this.vy += dy * 0.015;
+
+                // Mouse interaction physics (Attraction / Repulsion depending on speed)
+                if (mouse.active) {
+                    const mdx = mouse.x - this.x;
+                    const mdy = mouse.y - this.y;
+                    const dist = Math.sqrt(mdx * mdx + mdy * mdy);
+                    
+                    if (dist < mouse.radius) {
+                        const force = (mouse.radius - dist) / mouse.radius;
+                        const angle = Math.atan2(mdy, mdx);
+                        
+                        // Push away from cursor smoothly (creates beautiful ripples)
+                        this.vx -= Math.cos(angle) * force * 4.5;
+                        this.vy -= Math.sin(angle) * force * 4.5;
+
+                        // Create a subtle whirlpool/dust spiral swirl effect
+                        this.vx += Math.sin(angle) * force * 1.5;
+                        this.vy -= Math.cos(angle) * force * 1.5;
+                        
+                        // Enlarge when cursor is near
+                        this.size = this.baseSize * (1.0 + force * 1.2);
+                    } else {
+                        this.size += (this.baseSize - this.size) * 0.1;
+                    }
+                } else {
+                    this.size += (this.baseSize - this.size) * 0.1;
+                }
+
+                // Apply simple friction/damping
+                this.vx *= 0.92;
+                this.vy *= 0.92;
+
+                // Update position
+                this.x += this.vx;
+                this.y += this.vy;
+            }
+
+            draw() {
+                // Natural pulsing glow
+                const flash = Math.sin(Date.now() * this.speed + this.phase) * 0.25;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fillStyle = this.baseColor + Math.max(0.1, this.alpha + flash) + ')';
+                ctx.fill();
+            }
+        }
+
+        class SplashSpark {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * 6 + 2;
+                this.vx = Math.cos(angle) * speed;
+                this.vy = Math.sin(angle) * speed;
+                this.size = Math.random() * 3 + 1.5;
+                this.alpha = 1.0;
+                this.decay = Math.random() * 0.02 + 0.015;
+                this.color = `rgba(253, 164, 175, `; // Soft glowing pink
+            }
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.vy += 0.06; // subtle gravity pull
+                this.vx *= 0.98;
+                this.alpha -= this.decay;
+            }
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fillStyle = this.color + this.alpha + ')';
+                ctx.fill();
+            }
+        }
+
+        const particles = [];
+        const splashes = [];
+        const totalParticles = 1400; // Optimal density matching image_bcb164.png
+
+        function initHeart() {
+            particles.length = 0;
+            for (let i = 0; i < totalParticles; i++) {
+                // Maps particles evenly around parametric heart curve
+                const t = (i / totalParticles) * Math.PI * 2;
+                const point = getHeartPoint(t);
+                
+                // Add minor random scatter/noise so it looks like soft, organic dust
+                const scatter = (Math.random() - 0.5) * 1.8;
+                const finalX = point.x + scatter * Math.sin(t);
+                const finalY = point.y + scatter * Math.cos(t);
+
+                particles.push(new Particle(finalX, finalY, i / totalParticles));
+            }
+        }
+
+        // Click/Touch triggers instant burst of affection sparks
+        window.addEventListener('mousedown', (e) => {
+            for (let i = 0; i < 30; i++) {
+                splashes.push(new SplashSpark(e.clientX, e.clientY));
+            }
+        });
+
+        window.addEventListener('touchstart', (e) => {
+            const touch = e.touches[0];
+            for (let i = 0; i < 30; i++) {
+                splashes.push(new SplashSpark(touch.clientX, touch.clientY));
+            }
+        }, { passive: true });
+
+        function renderLoop() {
+            // Create a premium motion blur trailing effect (using semi-transparent black background redraws)
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.18)';
+            ctx.fillRect(0, 0, width, height);
+
+            // Interpolate center coordinates smoothly for responsive parallax
+            heartCenter.x += (heartCenter.targetX - heartCenter.x) * 0.08;
+            heartCenter.y += (heartCenter.targetY - heartCenter.y) * 0.08;
+
+            // Render loop with high luminosity composite operations
+            ctx.globalCompositeOperation = 'screen';
+
+            // Draw core heart particles
+            for (let i = 0; i < particles.length; i++) {
+                particles[i].update();
+                particles[i].draw();
+            }
+
+            // Draw splashes
+            for (let i = splashes.length - 1; i >= 0; i--) {
+                splashes[i].update();
+                splashes[i].draw();
+                if (splashes[i].alpha <= 0) {
+                    splashes.splice(i, 1);
+                }
+            }
+
+            ctx.globalCompositeOperation = 'source-over';
+            requestAnimationFrame(renderLoop);
+        }
+
+        // Initialize and start on screen load
+        initHeart();
+        renderLoop();
+    </script>
+</body>
+</html>
